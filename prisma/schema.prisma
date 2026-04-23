@@ -1,12 +1,12 @@
 // prisma/schema.prisma
 
 generator client {
-  provider = "prisma-client"                   
+  provider = "prisma-client"
   output   = "../src/generated/prisma/client"
 }
 
 datasource db {
-  provider = "postgresql" 
+  provider = "postgresql"
 }
 
 // ==========================================
@@ -16,15 +16,68 @@ datasource db {
 enum UserRole {
   SUPERADMIN
   HR
+  TA
+  ADMIN
+  IT
   MANAGER
   EMPLOYEE
 }
 
 enum EmploymentStatus {
   ACTIVE
-  ON_LEAVE
-  TERMINATED
   PROBATION
+  ON_NOTICE
+  ON_LEAVE
+  RESIGNED
+  TERMINATED
+  INACTIVE
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum MaritalStatus {
+  SINGLE
+  MARRIED
+  DIVORCED
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERNSHIP
+}
+
+enum AssetCategory {
+  IT
+  ADMIN
+}
+
+enum AssetCondition {
+  NEW
+  GOOD
+  USED
+  DAMAGED
+}
+
+enum DocumentCategory {
+  ONBOARDING
+  EDUCATIONAL
+  WARNING
+  PROMOTION
+  EXPERIENCE
+  OTHER
+}
+
+enum AssetStatus {
+  AVAILABLE
+  ASSIGNED
+  UNDER_REPAIR
+  RETIRED
 }
 
 enum AttendanceStatus {
@@ -32,6 +85,8 @@ enum AttendanceStatus {
   LATE
   ABSENT
   HALF_DAY
+  SHORT_DAY // Added for <8 hours
+  MISSING_PUNCH // Added for missing OUT punch
   ON_LEAVE
 }
 
@@ -40,6 +95,7 @@ enum LeaveType {
   CASUAL
   ANNUAL
   UNPAID
+  SHORT_LEAVE // Added for 0.25 day deductions
 }
 
 enum LeaveStatus {
@@ -48,18 +104,35 @@ enum LeaveStatus {
   REJECTED
 }
 
-enum AssetType {
-  LAPTOP
-  MONITOR
-  PHONE
-  ACCESSORY
+enum RequestType {
+  REGULARIZATION
+  EXEMPTION
+  WFH
+  OVERTIME
+  SHIFT_CHANGE_TEMP
+  SHIFT_CHANGE_PERM
 }
 
-enum AssetStatus {
-  AVAILABLE
-  ASSIGNED
-  IN_REPAIR
-  RETIRED
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  FORCE_APPROVED
+}
+
+enum NoticeTiming {
+  OVER_24_HOURS
+  SAME_DAY
+  UNDER_1_HOUR
+  NO_NOTICE
+}
+
+enum CommunicationMode {
+  EMAIL
+  WHATSAPP
+  CALL
+  IN_PERSON
 }
 
 enum PayrollStatus {
@@ -73,155 +146,347 @@ enum PayrollStatus {
 // ==========================================
 
 model Employee {
-  id              String           @id @default(uuid())
-  email           String           @unique
-  passwordHash    String
-  role            UserRole         @default(EMPLOYEE)
-  
-  firstName       String
-  lastName        String
-  phone           String?
-  address         String?
-  avatarUrl       String?
+  id         String @id @default(uuid())
+  employeeId String @unique
 
-  jobTitle        String
-  departmentId    String?
-  department      Department?      @relation(fields: [departmentId], references: [id])
-  managerId       String?
-  manager         Employee?        @relation("ManagerToSubordinate", fields: [managerId], references: [id])
-  subordinates    Employee[]       @relation("ManagerToSubordinate")
-  
-  status          EmploymentStatus @default(ACTIVE)
-  joinDate        DateTime
-  baseSalary      Decimal          @db.Decimal(10, 2)
+  passwordHash String
+  role         UserRole @default(EMPLOYEE)
 
-  attendances     Attendance[]
-  leaves          Leave[]          @relation("EmployeeLeaves")
-  leavesApproved  Leave[]          @relation("ManagerApprovals")
-  assets          Asset[]
-  payslips        Payroll[]
+  // 1. Personal Info
+  firstName        String
+  lastName         String
+  email            String
+  workEmail        String?        @unique
+  phone            String?
+  cnic             String?
+  dob              DateTime?      @db.Date
+  gender           Gender?
+  maritalStatus    MaritalStatus?
+  address          String?        @db.Text
+  emergencyContact String?
+  avatarUrl        String?
 
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  // 2. Professional Details
+  departmentId   String?
+  department     Department?     @relation("DepartmentEmployees", fields: [departmentId], references: [id])
+  managedDepts   Department[]    @relation("DepartmentHeads")
+  designation    String
+  employmentType EmploymentType?
+  joiningDate    DateTime?       @db.Date
+  workLocation   String?
 
-  @@index([email])
-  @@index([departmentId])
+  managerId    String?
+  manager      Employee?  @relation("ManagerToSubordinate", fields: [managerId], references: [id])
+  subordinates Employee[] @relation("ManagerToSubordinate")
+
+  status EmploymentStatus @default(ACTIVE)
+
+  // 3. Shift & Attendance Settings (NEW)
+  shiftId        String?
+  shift          Shift?  @relation(fields: [shiftId], references: [id])
+  bypassGeofence Boolean @default(false) // HR override
+  bypassIp       Boolean @default(false) // HR override
+
+  // 4. Salary & Bank
+  basicSalary  Decimal? @db.Decimal(10, 2)
+  grossSalary  Decimal? @db.Decimal(10, 2)
+  bankName     String?
+  accountTitle String?
+  iban         String?
+
+  // 5. Offboarding Data
+  exitType           String?
+  lastWorkingDay     DateTime? @db.Date
+  noticePeriodServed Boolean?
+  exitRemarks        String?   @db.Text
+
+  // Relationships
+  assets           Asset[]
+  dependentsList   Dependent[]
+  documents        EmployeeDocument[]
+  salaryHistory    SalaryHistory[]
+  assetAssignments AssetAssignment[]
+  jobHistory       JobHistory[]
+  attendances      Attendance[]
+  leaves           Leave[]             @relation("EmployeeLeaves")
+  leavesApproved   Leave[]             @relation("ManagerApprovals")
+  payslips         Payroll[]
+  requests         AttendanceRequest[] @relation("EmployeeRequests")
+  requestsApproved AttendanceRequest[] @relation("ManagerApprovedRequests")
+  penalties        PenaltyRecord[]
+  auditLogs        AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workEmail])
+  @@index([employeeId])
+  @@index([status])
 }
 
 model Department {
-  id              String     @id @default(uuid())
-  name            String     @unique 
-  headId          String?    @unique 
-  
-  employees       Employee[]
-  
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  id   String @id @default(uuid())
+  name String @unique
+
+  employees Employee[] @relation("DepartmentEmployees")
+  heads     Employee[] @relation("DepartmentHeads")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// --- NEW: Office & Geofencing Settings ---
+model OfficeLocation {
+  id           String  @id @default(uuid())
+  name         String  @unique // e.g., "HQ Karachi"
+  ipAddress    String? // Whitelisted IP
+  latitude     Float?
+  longitude    Float?
+  radiusMeters Int     @default(100)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// --- NEW: Shift Definitions ---
+model Shift {
+  id            String  @id @default(uuid())
+  code          String  @unique // e.g., "MORN-01"
+  name          String // e.g., "Morning Shift"
+  startTime     String // Format "HH:mm" (e.g., "09:00")
+  endTime       String // Format "HH:mm" (e.g., "18:00")
+  graceTimeMins Int     @default(15)
+  workingHours  Decimal @default(9.0) @db.Decimal(4, 2)
+
+  employees Employee[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Attendance {
-  id              String           @id @default(uuid())
-  employeeId      String
-  employee        Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  
-  date            DateTime         @db.Date
-  checkIn         DateTime?
-  checkOut        DateTime?
-  totalHours      Decimal?         @db.Decimal(5, 2)
-  status          AttendanceStatus
+  id         String   @id @default(uuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  date       DateTime         @db.Date
+  checkIn    DateTime?
+  checkOut   DateTime?
+  totalHours Decimal?         @db.Decimal(5, 2)
+  status     AttendanceStatus
 
-  @@unique([employeeId, date]) 
+  // --- NEW: Geo-tracking & Compliance Fields ---
+  checkInIp   String?
+  checkOutIp  String?
+  checkInLat  Float?
+  checkInLng  Float?
+  checkOutLat Float?
+  checkOutLng Float?
+
+  isLate          Boolean @default(false)
+  isHalfDay       Boolean @default(false)
+  earlyExitReason String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, date])
   @@index([date])
 }
 
-model Leave {
-  id              String      @id @default(uuid())
-  employeeId      String
-  employee        Employee    @relation("EmployeeLeaves", fields: [employeeId], references: [id], onDelete: Cascade)
-  
-  type            LeaveType
-  startDate       DateTime    @db.Date
-  endDate         DateTime    @db.Date
-  totalDays       Int
-  reason          String?     @db.Text
-  
-  status          LeaveStatus @default(PENDING)
-  approvedById    String?
-  approvedBy      Employee?   @relation("ManagerApprovals", fields: [approvedById], references: [id])
-  managerComment  String?     @db.Text
+// --- NEW: Unified Request Engine ---
+model AttendanceRequest {
+  id         String   @id @default(uuid())
+  employeeId String
+  employee   Employee @relation("EmployeeRequests", fields: [employeeId], references: [id], onDelete: Cascade)
 
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  type        RequestType
+  requestDate DateTime    @db.Date
+  timeFrom    String? // HH:mm (Used for OT, WFH, Shift Changes)
+  timeTo      String? // HH:mm
+  newShiftId  String? // Used for Shift Change requests
+  reason      String      @db.Text
+
+  // --- Compliance & Behavioral Checks ---
+  informedInAdvance Boolean            @default(false)
+  noticeTiming      NoticeTiming?
+  communicationMode CommunicationMode?
+
+  // --- Approval Workflow ---
+  status         RequestStatus @default(PENDING)
+  managerId      String?
+  manager        Employee?     @relation("ManagerApprovedRequests", fields: [managerId], references: [id])
+  managerRemarks String?       @db.Text
+  hrRemarks      String?       @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([employeeId])
   @@index([status])
 }
 
+// --- NEW: Penalty Ledger ---
+model PenaltyRecord {
+  id         String   @id @default(uuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  dateApplied   DateTime @db.Date
+  penaltyType   String // e.g., "LATE_DEDUCTION", "HALF_DAY_DEDUCTION"
+  deductionDays Decimal  @db.Decimal(4, 2) // e.g., 0.5, 1.0
+  reason        String?  @db.Text
+
+  createdAt DateTime @default(now())
+}
+
+// --- NEW: System Audit Log ---
+model AuditLog {
+  id            String   @id @default(uuid())
+  action        String // e.g., "FORCE_APPROVED_ATTENDANCE", "BYPASSED_GEOFENCE"
+  performedById String
+  performedBy   Employee @relation(fields: [performedById], references: [id])
+  targetEntity  String // e.g., "AttendanceRequest", "Employee"
+  targetId      String
+  details       String   @db.Text // Stringified JSON of before/after
+
+  createdAt DateTime @default(now())
+}
+
+// ... (Rest of the previous models remain unchanged: Leave, Asset, Payroll, CalendarEvent, SystemSetting, Dependent, EmployeeDocument, SalaryHistory, AssetAssignment, JobHistory)
+
+model Leave {
+  id             String      @id @default(uuid())
+  employeeId     String
+  employee       Employee    @relation("EmployeeLeaves", fields: [employeeId], references: [id], onDelete: Cascade)
+  type           LeaveType
+  startDate      DateTime    @db.Date
+  endDate        DateTime    @db.Date
+  totalDays      Decimal     @db.Decimal(4, 2) // Changed to Decimal to support 0.25 short leaves
+  reason         String?     @db.Text
+  status         LeaveStatus @default(PENDING)
+  approvedById   String?
+  approvedBy     Employee?   @relation("ManagerApprovals", fields: [approvedById], references: [id])
+  managerComment String?     @db.Text
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+}
+
 model Asset {
-  id              String      @id @default(uuid())
-  assetTag        String      @unique 
-  type            AssetType
-  make            String
-  model           String
-  serialNumber    String      @unique
-  status          AssetStatus @default(AVAILABLE)
-  
-  assignedToId    String?
-  assignedTo      Employee?   @relation(fields: [assignedToId], references: [id])
-  assignedDate    DateTime?
-
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-
-  @@index([assignedToId])
-  @@index([status])
+  id                String            @id @default(uuid())
+  title             String
+  serialNumber      String            @unique
+  category          AssetCategory
+  subCategory       String
+  purchaseDate      DateTime?         @db.Date
+  purchaseCost      Decimal?          @db.Decimal(10, 2)
+  vendorName        String?
+  warrantyExpiry    DateTime?         @db.Date
+  condition         AssetCondition    @default(NEW)
+  status            AssetStatus       @default(AVAILABLE)
+  assignedToId      String?
+  assignedTo        Employee?         @relation(fields: [assignedToId], references: [id])
+  assignmentDate    DateTime?         @db.Date
+  conditionAtIssue  AssetCondition?
+  assignmentRemarks String?           @db.Text
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  assignments       AssetAssignment[]
 }
 
 model Payroll {
-  id              String        @id @default(uuid())
-  employeeId      String
-  employee        Employee      @relation(fields: [employeeId], references: [id])
-  
-  month           Int           
-  year            Int           
-  
-  baseSalary      Decimal       @db.Decimal(10, 2)
-  bonuses         Decimal       @default(0.00) @db.Decimal(10, 2)
-  deductions      Decimal       @default(0.00) @db.Decimal(10, 2)
-  taxAmount       Decimal       @default(0.00) @db.Decimal(10, 2)
-  netPay          Decimal       @db.Decimal(10, 2)
-  
-  status          PayrollStatus @default(DRAFT)
-  paidDate        DateTime?
+  id         String        @id @default(uuid())
+  employeeId String
+  employee   Employee      @relation(fields: [employeeId], references: [id])
+  month      Int
+  year       Int
+  baseSalary Decimal       @db.Decimal(10, 2)
+  bonuses    Decimal       @default(0.00) @db.Decimal(10, 2)
+  deductions Decimal       @default(0.00) @db.Decimal(10, 2)
+  taxAmount  Decimal       @default(0.00) @db.Decimal(10, 2)
+  netPay     Decimal       @db.Decimal(10, 2)
+  status     PayrollStatus @default(DRAFT)
+  paidDate   DateTime?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
 
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-
-  @@unique([employeeId, month, year]) 
-  @@index([month, year])
+  @@unique([employeeId, month, year])
 }
 
 model CalendarEvent {
-  id              String   @id @default(uuid())
-  title           String
-  description     String?  @db.Text
-  date            DateTime @db.Date
-  isHoliday       Boolean  @default(false) 
-  
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@index([date])
+  id          String   @id @default(uuid())
+  title       String
+  description String?  @db.Text
+  date        DateTime @db.Date
+  isHoliday   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 model SystemSetting {
-  id              String   @id @default(uuid())
-  key             String   @unique 
-  value           String   @db.Text 
-  description     String?
-  
-  updatedAt       DateTime @updatedAt
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String   @db.Text
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model Dependent {
+  id         String    @id @default(uuid())
+  employeeId String
+  employee   Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  name       String
+  relation   String
+  dob        DateTime? @db.Date
+}
+
+model EmployeeDocument {
+  id           String           @id @default(uuid())
+  employeeId   String
+  employee     Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  category     DocumentCategory
+  documentName String
+  fileUrl      String
+  uploadedById String?
+  createdAt    DateTime         @default(now())
+}
+
+model SalaryHistory {
+  id            String   @id @default(uuid())
+  employeeId    String
+  employee      Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  basicSalary   Decimal  @db.Decimal(10, 2)
+  grossSalary   Decimal  @db.Decimal(10, 2)
+  effectiveDate DateTime @db.Date
+  remarks       String?  @db.Text
+  createdAt     DateTime @default(now())
+}
+
+model AssetAssignment {
+  id                String          @id @default(uuid())
+  assetId           String
+  asset             Asset           @relation(fields: [assetId], references: [id])
+  employeeId        String
+  employee          Employee        @relation(fields: [employeeId], references: [id])
+  issueDate         DateTime        @db.Date
+  issuedById        String
+  conditionAtIssue  AssetCondition
+  issueRemarks      String?         @db.Text
+  returnDate        DateTime?       @db.Date
+  returnedToId      String?
+  conditionAtReturn AssetCondition?
+  damageNotes       String?         @db.Text
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+}
+
+model JobHistory {
+  id            String   @id @default(uuid())
+  employeeId    String
+  employee      Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  department    String?
+  designation   String
+  effectiveDate DateTime @db.Date
+  remarks       String?  @db.Text
+  createdAt     DateTime @default(now())
 }
